@@ -1,0 +1,1 @@
+ZX Flutter source project. Run flutter create . if platform wrapper files are missing, then flutter pub get and flutter build apk --release.
