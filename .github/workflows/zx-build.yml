@@ -1,0 +1,102 @@
+name: ZX - Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform files
+        run: flutter create . --platforms=android --org com.example
+
+      - name: Exclude the crashing CameraX release lint task
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f android/build.gradle.kts ]]; then
+            cat >> android/build.gradle.kts <<'EOF'
+
+          // Work around the known Android Lint CommentDetector crash in CameraX.
+          subprojects {
+              if (project.name == "camera_android_camerax") {
+                  tasks.configureEach {
+                      if (name == "lintVitalAnalyzeRelease") {
+                          enabled = false
+                      }
+                  }
+              }
+          }
+          EOF
+          elif [[ -f android/build.gradle ]]; then
+            cat >> android/build.gradle <<'EOF'
+
+          // Work around the known Android Lint CommentDetector crash in CameraX.
+          subprojects {
+              if (project.name == "camera_android_camerax") {
+                  tasks.configureEach {
+                      if (name == "lintVitalAnalyzeRelease") {
+                          enabled = false
+                      }
+                  }
+              }
+          }
+          EOF
+          else
+            echo "::error::Flutter did not generate android/build.gradle(.kts)"
+            exit 1
+          fi
+
+      - name: Resolve Flutter dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build apk --release --verbose
+
+      - name: Verify and stage APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          if [[ ! -f "$APK" ]]; then
+            echo "::error::Flutter did not create the expected release APK."
+            echo "APK files found in workspace:"
+            find . -type f -iname '*.apk' -not -path './.git/*' -print || true
+            echo "Build output directories:"
+            find build -maxdepth 7 -type d -print 2>/dev/null || true
+            exit 1
+          fi
+          mkdir -p artifacts
+          cp "$APK" artifacts/ZX-release.apk
+          ls -lh artifacts/ZX-release.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZX-Android-APK
+          path: artifacts/ZX-release.apk
+          if-no-files-found: error
+          retention-days: 14
